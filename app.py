@@ -1,74 +1,95 @@
-import webbrowser
+import streamlit as st
 import urllib.parse
 
-def generate_email_intent():
-    # --- INPUT DATA ---
-    witel = input("1. WITEL: ") or "JAKARTA SELATAN"
-    sto = input("2. STO: ") or "JAG"
-    order_id = input("3. Order ID: ")
-    
-    print("\nPilih Status OSM:")
-    print("1. WorkForceTask, 2. CreateTTTaskForTom, 3. Gettom, 4. GetSOMTTRESPONE, 5. COMPLATED")
-    osm_idx = input("Nomor Status: ")
-    osm_list = ["WorkForceTask", "CreateTTTaskForTom", "Gettom", "GetSOMTTRESPONE", "COMPLATED"]
-    status_osm = osm_list[int(osm_idx)-1] if osm_idx else "WorkForceTask"
+# Konfigurasi Halaman
+st.set_page_config(page_title="Tool OPEN BI - Reihan", page_icon="📧")
 
-    wonum = input("5. WONUM: ")
-    
-    print("\nPilih Status BIMA:")
-    bima_list = ["WAPPR", "STARTWORK", "WORKFAIL", "PENDWORK", "CAONTWORK", "CANCLWORK", "INSTCOMP", "ACTCOMP", "VALSTART", "VALCOMP", "DEINSTCOMP", "COMPWORK"]
-    for i, s in enumerate(bima_list): print(f"{i+1}. {s}")
-    bima_idx = input("Nomor Status: ")
-    status_bima = bima_list[int(bima_idx)-1] if bima_idx else "WAPPR"
+st.title("📧 Generator Draf Email OPEN BI")
+st.info("Isi data di bawah, lalu klik tombol untuk otomatis membuka draf di Gmail/Outlook.")
 
-    # --- GRUP DINAMIS (7, 8, 9) ---
-    layanan_data = ""
-    while True:
-        nd = input("\n7. ND: ")
-        rfs = input("8. BI ID RFS: ")
-        cfs = input("9. BI ID CFS: ")
-        layanan_data += f"7. ND  {nd}\r\n8. BI ID RFS     {rfs}\r\n9. BI ID CFS      {cfs}\r\n"
-        
-        tambah = input("Tambah Grup ND lagi? (y/n): ")
-        if tambah.lower() != 'y': break
+# --- 1. DATA UTAMA ---
+col1, col2 = st.columns(2)
+with col1:
+    witel = st.text_input("1. WITEL", value="JAKARTA SELATAN")
+    sto = st.text_input("2. STO", value="JAG")
+with col2:
+    order_id = st.text_input("3. Order ID", value="A301260205100629935229750-MOi1260205100630602d5dcf0_65638107")
+    status_osm = st.selectbox("4. STATUS ORDER ID (OSM)", 
+                                ["WorkForceTask", "CreateTTTaskForTom", "Gettom", "GetSOMTTRESPONE", "COMPLATED"])
 
-    tiket_bima = input("10. TIKET BIMA: ")
-    ibooster = input("11. CEK IBOOSTER (Online/Offline/dll): ")
-    layanan = input("12. LAYANAN DO: ")
-    nama_hd = "HD ISH REIHAN MUTAQIN"
+col3, col4 = st.columns(2)
+with col3:
+    wonum = st.text_input("5. WONUM", value="WO045406357")
+with col4:
+    status_bima = st.selectbox("6. STATUS WONUM (BIMA)", 
+                                 ["WAPPR", "STARTWORK", "WORKFAIL", "PENDWORK", "CAONTWORK", "CANCLWORK", "INSTCOMP", "ACTCOMP", "VALSTART", "VALCOMP", "DEINSTCOMP", "COMPWORK"])
 
-    # --- PENERIMA ---
-    tujuan = "novi@tif.co.id,yosia.bagariang@tif.co.id,rocdua2@gmail.com"
-    subject = f"OPEN BI - {nd}"
+# --- 2. GRUP DINAMIS (7, 8, 9) ---
+st.subheader("Data Layanan (ND, BI RFS, BI CFS)")
+if 'groups' not in st.session_state:
+    st.session_state.groups = 1
 
-    # --- MERAKIT BODY EMAIL ---
-    body = f"""1. WITEL {witel}
-2. STO {sto}
-3. Order ID  {order_id}
-4. STATUS ORDER ID (OSM)     >  ( {status_osm} )
+def add_group():
+    st.session_state.groups += 1
 
-5. WONUM  {wonum}
-6. STATUS WONUM (BIMA)      > ( {status_bima} )
+group_list = []
+for i in range(st.session_state.groups):
+    with st.expander(f"Grup Data {i+1}", expanded=True):
+        g_nd = st.text_input(f"7. ND (Grup {i+1})", key=f"nd_{i}")
+        g_rfs = st.text_input(f"8. BI ID RFS (Grup {i+1})", key=f"rfs_{i}")
+        g_cfs = st.text_input(f"9. BI ID CFS (Grup {i+1})", key=f"cfs_{i}")
+        group_list.append({"nd": g_nd, "rfs": g_rfs, "cfs": g_cfs})
 
-{layanan_data}
-10. TIKET BIMA   {tiket_bima}
-11. CEK IBOOSTER   > ({ibooster})
-12. LAYANAN DO > ({layanan})
+st.button("➕ Tambah Grup Data (7, 8, 9)", on_click=add_group)
 
-13. [PASTE GAMBAR DI SINI]
+# --- 3. DATA TAMBAHAN ---
+st.divider()
+tiket_bima = st.text_input("10. TIKET BIMA", value="INF007196948")
+ibooster = st.selectbox("11. CEK IBOOSTER", 
+                         ["Online", "los", "Dying Gasp", "Offline", "Tidak ada datek", "Datek voice belum ims", "Unknow"])
 
-DARI      : {nama_hd}
-"""
+st.write("12. LAYANAN DO")
+layanan_opts = ["VOICE", "INTERNET", "IPTV", "OTT"]
+sel_layanan = []
+l_cols = st.columns(4)
+for idx, opt in enumerate(layanan_opts):
+    if l_cols[idx].checkbox(opt):
+        sel_layanan.append(opt)
+layanan_final = " + ".join(sel_layanan) if sel_layanan else "VOICE"
 
-    # --- MEMBUKA APLIKASI EMAIL ---
-    # Mengubah teks menjadi format URL
-    subject_encoded = urllib.parse.quote(subject)
-    body_encoded = urllib.parse.quote(body)
-    
-    mail_to_url = f"mailto:{tujuan}?subject={subject_encoded}&body={body_encoded}"
-    
-    print("\nSedang membuka draf email...")
-    webbrowser.open(mail_to_url)
+nama_hd = st.text_input("DARI (Nama HD)", value="HD ISH REIHAN MUTAQIN")
 
-if __name__ == "__main__":
-    generate_email_intent()
+# --- 4. GENERATOR LOGIC ---
+tujuan = "novi@tif.co.id,yosia.bagariang@tif.co.id,rocdua2@gmail.com"
+
+# Merakit Body Pesan
+body_pesan = f"1. WITEL {witel}\r\n"
+body_pesan += f"2. STO {sto}\r\n"
+body_pesan += f"3. Order ID  {order_id}\r\n"
+body_pesan += f"4. STATUS ORDER ID (OSM)     >  ( {status_osm} )\r\n\r\n"
+body_pesan += f"5. WONUM  {wonum}\r\n"
+body_pesan += f"6. STATUS WONUM (BIMA)      > ( {status_bima} )\r\n\r\n"
+
+for idx, g in enumerate(group_list):
+    body_pesan += f"7. ND  {g['nd']}\r\n"
+    body_pesan += f"8. BI ID RFS     {g['rfs']}\r\n"
+    body_pesan += f"9. BI ID CFS      {g['cfs']}\r\n"
+
+body_pesan += f"\r\n10. TIKET BIMA   {tiket_bima}\r\n"
+body_pesan += f"11. CEK IBOOSTER   > ({ibooster})\r\n"
+body_pesan += f"12. LAYANAN DO > ({layanan_final})\r\n\r\n"
+body_pesan += f"13. [PASTE GAMBAR SS DI SINI]\r\n\r\n"
+body_pesan += f"DARI      : {nama_hd}"
+
+# URL Encoding untuk Mailto
+subject = f"OPEN BI - {group_list[0]['nd'] if group_list[0]['nd'] else sto}"
+mailto_link = f"mailto:{tujuan}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body_pesan)}"
+
+st.divider()
+st.subheader("Preview Draft:")
+st.code(body_pesan)
+
+# Tombol Eksekusi
+st.link_button("🚀 BUKA GMAIL / OUTLOOK", mailto_link, use_container_width=True)
+
+st.caption("Setelah klik tombol di atas, aplikasi email akan terbuka. Jangan lupa tekan Ctrl+V untuk paste gambar di poin 13.")
