@@ -1,643 +1,625 @@
-"""
-WSA Fulfillment Pro - Aplikasi Utama
-Aplikasi Streamlit untuk manajemen data WSA dengan integrasi Google Sheets
-
-Fitur:
-- Multi-mode: WSA, MODOROSO, WAPPR
-- Data cleansing dan validasi
-- Integrasi Google Sheets
-- Analytics dan reporting
-- Data quality checker
-- Multi-format export
-"""
-
 import streamlit as st
 import pandas as pd
-import time
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import io
 from datetime import datetime
-
-# Import konfigurasi
-from config.settings import (
-    APP_NAME, APP_VERSION, APP_DESCRIPTION,
-    UI_CONFIG, BULAN_SINGKAT, ERROR_MESSAGES, SUCCESS_MESSAGES,
-    EXPORT_CONFIG
-)
-
-# Import utilities
-from src.utils import (
-    logger, get_bulan_indonesia, get_current_period,
-    validate_file_extension, memory_usage,
-    export_to_excel, export_to_csv, export_to_json,
-    init_session_state
-)
-
-# Import processors
-from src.data_processor import DataProcessor
-from src.google_sheets import get_gspread_client_streamlit
-from src.analytics import DataAnalyzer, MetricsCalculator, ReportGenerator
-from src.quality_checker import DataQualityChecker, QualityReport
+import time
 
 # ==========================================
 # KONFIGURASI HALAMAN
 # ==========================================
 st.set_page_config(
-    page_title=f"{APP_NAME} v{APP_VERSION}",
-    page_icon=UI_CONFIG['page_icon'],
-    layout=UI_CONFIG['layout'],
+    page_title="WSA Fulfillment Pro",
+    page_icon="🚀",
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ==========================================
-# CSS CUSTOM
+# CSS MODERN & PROFESIONAL
 # ==========================================
-st.markdown(f"""
+st.markdown("""
     <style>
-    /* Main Theme */
-    .stApp {{
-        background-color: #0e1117;
-        color: #ffffff;
-    }}
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
-    /* Sidebar */
-    [data-testid="stSidebar"] {{
-        background-color: #1a1c24;
-    }}
+    * {
+        font-family: 'Inter', sans-serif;
+    }
+    
+    .stApp {
+        background: linear-gradient(135deg, #0a0e1a 0%, #0d1320 50%, #0a0e1a 100%);
+        color: #e8ecf1;
+    }
+    
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0f1623 0%, #151d2e 100%);
+        border-right: 1px solid rgba(0, 212, 255, 0.1);
+    }
+    
+    [data-testid="stSidebar"] .stRadio > div {
+        background: rgba(30, 41, 59, 0.5);
+        border-radius: 12px;
+        padding: 8px;
+    }
+    
+    [data-testid="stSidebar"] .stRadio label {
+        color: #94a3b8 !important;
+        font-weight: 500;
+        padding: 10px 15px;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+    }
+    
+    [data-testid="stSidebar"] .stRadio label:hover {
+        background: rgba(0, 212, 255, 0.1);
+        color: #00d4ff !important;
+    }
+    
+    [data-testid="stSidebar"] [aria-checked="true"] {
+        background: linear-gradient(135deg, #00d4ff 0%, #008fb3 100%) !important;
+        color: #000 !important;
+        font-weight: 600 !important;
+    }
     
     /* Headers */
-    h1, h2, h3 {{
-        color: {UI_CONFIG['primary_color']} !important;
-    }}
+    h1 {
+        background: linear-gradient(90deg, #00d4ff 0%, #00ff88 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-weight: 700 !important;
+        font-size: 2.5rem !important;
+        margin-bottom: 0.5rem !important;
+    }
     
-    /* Metric Cards */
-    .metric-card {{
-        background: linear-gradient(135deg, #1e2129 0%, #2a2d3a 100%);
-        padding: 20px;
+    h2, h3 {
+        color: #00d4ff !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Status Box */
+    .status-box {
+        padding: 16px 20px;
         border-radius: 12px;
-        border-left: 4px solid {UI_CONFIG['primary_color']};
-        box-shadow: 0 4px 15px rgba(0, 212, 255, 0.1);
-        margin-bottom: 15px;
-    }}
-    
-    .metric-card h2 {{
-        margin: 0;
-        font-size: 32px;
-        color: {UI_CONFIG['primary_color']} !important;
-    }}
-    
-    .metric-card h5 {{
-        margin: 0;
-        color: #888;
-        font-size: 12px;
-        text-transform: uppercase;
-    }}
-    
-    /* Status Boxes */
-    .status-box {{
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 20px;
+        margin-bottom: 24px;
         font-weight: 600;
-    }}
-    
-    .success-box {{
-        background: linear-gradient(135deg, #1c4f2e 0%, #2d6a4f 100%);
-        color: {UI_CONFIG['success_color']};
-        border: 1px solid {UI_CONFIG['success_color']};
-    }}
-    
-    .error-box {{
-        background: linear-gradient(135deg, #4f1c1c 0%, #6a2d2d 100%);
-        color: {UI_CONFIG['error_color']};
-        border: 1px solid {UI_CONFIG['error_color']};
-    }}
-    
-    .warning-box {{
-        background: linear-gradient(135deg, #4f3c1c 0%, #6a5d2d 100%);
-        color: {UI_CONFIG['warning_color']};
-        border: 1px solid {UI_CONFIG['warning_color']};
-    }}
-    
-    /* Download Buttons */
-    .stDownloadButton button {{
-        background: linear-gradient(45deg, {UI_CONFIG['primary_color']}, {UI_CONFIG['secondary_color']}) !important;
-        color: #000000 !important;
-        font-weight: bold;
-        width: 100%;
-        border-radius: 10px;
-        padding: 12px 24px;
-        transition: all 0.3s ease;
-    }}
-    
-    .stDownloadButton button:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 5px 20px rgba(0, 212, 255, 0.4);
-    }}
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 8px;
-    }}
-    
-    .stTabs [data-baseweb="tab"] {{
-        background-color: #1e2129;
-        border-radius: 8px 8px 0 0;
-        padding: 10px 20px;
-        color: #888;
-    }}
-    
-    .stTabs [aria-selected="true"] {{
-        background-color: {UI_CONFIG['primary_color']} !important;
-        color: #000 !important;
-    }}
-    
-    /* DataFrame */
-    .stDataFrame {{
-        border-radius: 10px;
-        overflow: hidden;
-    }}
-    
-    /* Progress Bar */
-    .stProgress > div > div {{
-        background-color: {UI_CONFIG['primary_color']};
-    }}
-    
-    /* Expander */
-    .streamlit-expanderHeader {{
-        background-color: #1e2129;
-        border-radius: 8px;
-    }}
-    
-    /* Info Box */
-    .info-box {{
-        background: linear-gradient(135deg, #1e3a5f 0%, #2d4a6f 100%);
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 4px solid {UI_CONFIG['primary_color']};
-        margin-bottom: 15px;
-    }}
-    
-    /* Quality Score */
-    .quality-score {{
-        font-size: 48px;
-        font-weight: bold;
-        text-align: center;
-        padding: 20px;
-        border-radius: 50%;
-        width: 120px;
-        height: 120px;
+        font-size: 14px;
         display: flex;
         align-items: center;
-        justify-content: center;
-        margin: 0 auto;
-    }}
+        gap: 12px;
+        backdrop-filter: blur(10px);
+    }
+    
+    .success-box {
+        background: linear-gradient(135deg, rgba(0, 255, 136, 0.15) 0%, rgba(0, 255, 136, 0.05) 100%);
+        border: 1px solid rgba(0, 255, 136, 0.3);
+        color: #00ff88;
+    }
+    
+    .error-box {
+        background: linear-gradient(135deg, rgba(255, 75, 75, 0.15) 0%, rgba(255, 75, 75, 0.05) 100%);
+        border: 1px solid rgba(255, 75, 75, 0.3);
+        color: #ff4b4b;
+    }
+    
+    .warning-box {
+        background: linear-gradient(135deg, rgba(255, 170, 0, 0.15) 0%, rgba(255, 170, 0, 0.05) 100%);
+        border: 1px solid rgba(255, 170, 0, 0.3);
+        color: #ffaa00;
+    }
+    
+    /* Metric Cards */
+    .metric-container {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.8) 100%);
+        border-radius: 16px;
+        padding: 24px;
+        border: 1px solid rgba(0, 212, 255, 0.15);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .metric-container::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #00d4ff, #00ff88);
+    }
+    
+    .metric-container:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 20px 40px rgba(0, 212, 255, 0.15);
+        border-color: rgba(0, 212, 255, 0.3);
+    }
+    
+    .metric-icon {
+        font-size: 28px;
+        margin-bottom: 12px;
+    }
+    
+    .metric-value {
+        font-size: 42px;
+        font-weight: 700;
+        background: linear-gradient(90deg, #fff 0%, #94a3b8 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        line-height: 1;
+    }
+    
+    .metric-value.success {
+        background: linear-gradient(90deg, #00ff88 0%, #00cc6a 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    
+    .metric-label {
+        font-size: 13px;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-top: 8px;
+    }
+    
+    /* Upload Area */
+    .upload-area {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.5) 0%, rgba(15, 23, 42, 0.5) 100%);
+        border: 2px dashed rgba(0, 212, 255, 0.3);
+        border-radius: 16px;
+        padding: 40px;
+        text-align: center;
+        transition: all 0.3s ease;
+    }
+    
+    .upload-area:hover {
+        border-color: #00d4ff;
+        background: linear-gradient(135deg, rgba(0, 212, 255, 0.1) 0%, rgba(0, 212, 255, 0.05) 100%);
+    }
+    
+    /* DataFrame */
+    .stDataFrame {
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid rgba(0, 212, 255, 0.1);
+    }
+    
+    /* Download Button */
+    .stDownloadButton button {
+        background: linear-gradient(135deg, #00d4ff 0%, #008fb3 100%) !important;
+        color: #000 !important;
+        font-weight: 600 !important;
+        padding: 14px 28px !important;
+        border-radius: 12px !important;
+        border: none !important;
+        transition: all 0.3s ease !important;
+        font-size: 14px !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    
+    .stDownloadButton button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 10px 30px rgba(0, 212, 255, 0.4) !important;
+    }
+    
+    /* Progress Bar */
+    .stProgress > div > div {
+        background: linear-gradient(90deg, #00d4ff 0%, #00ff88 100%) !important;
+        border-radius: 10px;
+    }
+    
+    /* Expander */
+    .streamlit-expanderHeader {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.8) 100%);
+        border-radius: 12px;
+        border: 1px solid rgba(0, 212, 255, 0.1);
+        font-weight: 500;
+    }
+    
+    /* Spinner */
+    .stSpinner > div {
+        border-color: #00d4ff !important;
+        border-top-color: transparent !important;
+    }
+    
+    /* Info Box */
+    .info-box {
+        background: linear-gradient(135deg, rgba(0, 212, 255, 0.1) 0%, rgba(0, 212, 255, 0.05) 100%);
+        border: 1px solid rgba(0, 212, 255, 0.2);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    
+    /* Divider */
+    hr {
+        border: none;
+        height: 1px;
+        background: linear-gradient(90deg, transparent 0%, rgba(0, 212, 255, 0.3) 50%, transparent 100%);
+        margin: 30px 0;
+    }
+    
+    /* Caption */
+    .stCaption {
+        color: #64748b !important;
+    }
+    
+    /* Multiselect */
+    .stMultiSelect [data-baseweb="tag"] {
+        background: linear-gradient(135deg, #00d4ff 0%, #008fb3 100%) !important;
+        color: #000 !important;
+    }
+    
+    /* File Uploader */
+    .stFileUploader {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.5) 0%, rgba(15, 23, 42, 0.5) 100%);
+        border-radius: 16px;
+        padding: 20px;
+        border: 1px solid rgba(0, 212, 255, 0.1);
+    }
     
     /* Animation */
-    @keyframes pulse {{
-        0%, 100% {{ opacity: 1; }}
-        50% {{ opacity: 0.7; }}
-    }}
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.2); }
+        50% { box-shadow: 0 0 40px rgba(0, 212, 255, 0.4); }
+    }
     
-    .pulse {{
-        animation: pulse 2s infinite;
-    }}
+    .glow-effect {
+        animation: pulse-glow 2s infinite;
+    }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    
+    ::-webkit-scrollbar-track {
+        background: #0a0e1a;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+        background: linear-gradient(180deg, #00d4ff 0%, #008fb3 100%);
+        border-radius: 4px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(180deg, #00ff88 0%, #00cc6a 100%);
+    }
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# SESSION STATE INITIALIZATION
+# KONEKSI GOOGLE SHEETS
 # ==========================================
-init_session_state({
-    'processed_data': None,
-    'raw_data': None,
-    'analytics_report': None,
-    'quality_report': None,
-    'processing_stats': {},
-    'last_upload': None,
-    'connection_status': False
-})
+@st.cache_resource(show_spinner=False)
+def get_gspread_client():
+    try:
+        info = dict(st.secrets["gcp_service_account"])
+        if 'private_key' in info:
+            info['private_key'] = info['private_key'].replace('\\n', '\n')
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(info, ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"])
+        return gspread.authorize(creds)
+    except Exception as e:
+        return None
+
+# ==========================================
+# FUNGSI LOGIKA
+# ==========================================
+def clean_common_data(df):
+    if 'Workorder' in df.columns:
+        df['Workorder'] = df['Workorder'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    if 'Booking Date' in df.columns:
+        df['Booking Date'] = df['Booking Date'].astype(str).str.split('.').str[0]
+    return df
+
+def proses_wsa(df):
+    col_sc = 'SC Order No/Track ID/CSRM No'
+    df = df[df[col_sc].astype(str).str.contains('AO|PDA|WSA', na=False)]
+    
+    if 'CRM Order Type' in df.columns:
+        df = df[df['CRM Order Type'].isin(['CREATE', 'MIGRATE'])]
+    
+    if 'Contact Number' in df.columns and 'Customer Name' in df.columns:
+        c_map = df.loc[df['Contact Number'].notna() & (df['Contact Number'] != ''), ['Customer Name', 'Contact Number']].drop_duplicates('Customer Name')
+        c_dict = dict(zip(c_map['Customer Name'], c_map['Contact Number']))
+        
+        def fill_contact(row):
+            val = str(row['Contact Number'])
+            if pd.isna(row['Contact Number']) or val.strip() == '' or val.lower() == 'nan':
+                return c_dict.get(row['Customer Name'], row['Contact Number'])
+            return row['Contact Number']
+        
+        df['Contact Number'] = df.apply(fill_contact, axis=1)
+    
+    return df, col_sc
+
+def proses_modoroso(df):
+    col_sc = 'SC Order No/Track ID/CSRM No'
+    df = df[df[col_sc].astype(str).str.contains(r'-MO|-DO', na=False, case=False)].copy()
+    
+    if 'CRM Order Type' in df.columns:
+        def detect_mo_do(val):
+            s = str(val).upper()
+            if '-MO' in s: return 'MO'
+            if '-DO' in s: return 'DO'
+            return 'MO'
+        df['CRM Order Type'] = df[col_sc].apply(detect_mo_do)
+    
+    df['Mitra'] = 'TSEL'
+    return df, 'Workorder'
+
+def proses_wappr(df):
+    col_sc = 'SC Order No/Track ID/CSRM No'
+    df = df[df[col_sc].astype(str).str.contains('AO|PDA', na=False)]
+    
+    if 'Status' in df.columns:
+        df = df[df['Status'].astype(str).str.strip().str.upper() == 'WAPPR']
+    
+    return df, 'Workorder'
 
 # ==========================================
 # SIDEBAR
 # ==========================================
 with st.sidebar:
-    st.title(f"⚙️ {APP_NAME}")
-    st.caption(f"v{APP_VERSION}")
+    st.markdown("""
+        <div style="text-align: center; padding: 20px 0;">
+            <h2 style="margin: 0; font-size: 24px;">⚙️ Control Panel</h2>
+            <p style="color: #64748b; font-size: 12px; margin-top: 5px;">WSA Fulfillment Pro</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
     st.markdown("---")
     
-    # Mode Selection
-    st.subheader("📋 Mode Operasi")
     menu = st.radio(
-        "Pilih Mode:",
+        "Pilih Operasi:",
         ["WSA (Validation)", "MODOROSO", "WAPPR"],
         help="Pilih mode operasi sesuai kebutuhan"
     )
     
     st.markdown("---")
     
-    # Filter Bulan
-    st.subheader("📅 Filter Periode")
-    curr_month, prev_month = get_current_period()
+    curr_month = datetime.now().month
+    prev_month = curr_month - 1 if curr_month > 1 else 12
     
+    st.markdown("📅 **Filter Periode**")
     selected_months = st.multiselect(
         "Bulan:",
         options=list(range(1, 13)),
         default=[prev_month, curr_month],
-        format_func=lambda x: get_bulan_indonesia(x, singkat=True)
+        format_func=lambda x: ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"][x-1],
+        label_visibility="collapsed"
     )
     
     st.markdown("---")
     
-    # Settings
-    st.subheader("🔧 Pengaturan")
-    
-    show_preview = st.checkbox("Tampilkan Preview Data", value=True)
-    show_analytics = st.checkbox("Tampilkan Analytics", value=True)
-    show_quality = st.checkbox("Data Quality Check", value=True)
-    
-    st.markdown("---")
-    
-    # Info
-    st.info(f"""
-    **{APP_NAME}**
-    
-    {APP_DESCRIPTION}
-    
-    **Fitur:**
-    - ✅ Data Cleansing
-    - ✅ Validasi Duplikat
-    - ✅ Analytics Dashboard
-    - ✅ Quality Checker
-    - ✅ Multi-format Export
-    """)
+    with st.expander("ℹ️ Informasi"):
+        st.markdown("""
+            **Mode Operasi:**
+            - **WSA**: Validasi data WSA
+            - **MODOROSO**: Proses MO/DO
+            - **WAPPR**: Filter WAPPR
+            
+            **Fitur:**
+            - ✅ Auto cleansing
+            - ✅ Validasi duplikat
+            - ✅ Filter bulan
+            - ✅ Export Excel
+        """)
 
 # ==========================================
-# MAIN CONTENT
+# MAIN APP
 # ==========================================
 st.title(f"🚀 {menu}")
-st.caption(f"{APP_NAME} - {datetime.now().strftime('%d %B %Y')}")
+st.caption(f"Dashboard Processing | {datetime.now().strftime('%d %B %Y')}")
 
-# ==========================================
-# KONEKSI GOOGLE SHEETS
-# ==========================================
-@st.cache_resource(show_spinner=False)
-def get_gs_client():
-    """Get Google Sheets client dengan caching"""
-    return get_gspread_client_streamlit()
+# Koneksi Google Sheets
+client = get_gspread_client()
+ws = None
+connection_status = False
 
-gs_client = get_gs_client()
-
-if gs_client:
-    # Open spreadsheet
-    spreadsheet_opened = gs_client.open_spreadsheet()
-    
-    if spreadsheet_opened:
-        st.session_state.connection_status = True
-        
-        # Get worksheet berdasarkan mode
+if client:
+    try:
+        sh = client.open("Salinan dari NEW GDOC WSA FULFILLMENT")
         if menu == "MODOROSO":
-            ws = gs_client.get_worksheet("MODOROSO_JAKTIMSEL")
             target_sheet_name = "MODOROSO_JAKTIMSEL"
+            try:
+                ws = sh.worksheet(target_sheet_name)
+            except:
+                st.markdown(f'<div class="status-box error-box">❌ Sheet "{target_sheet_name}" tidak ditemukan!</div>', unsafe_allow_html=True)
+                ws = None
         else:
-            ws = gs_client.get_worksheet(index=0)
+            ws = sh.get_worksheet(0)
             target_sheet_name = ws.title if ws else "Unknown"
-        
-        if ws:
-            st.markdown(
-                f'<div class="status-box success-box">'
-                f'✅ TERHUBUNG KE GOOGLE SHEETS | Sheet: {target_sheet_name}'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-        else:
-            st.markdown(
-                f'<div class="status-box warning-box">'
-                f'⚠️ TERHUBUNG TAPI SHEET TIDAK DITEMUKAN'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-    else:
-        st.session_state.connection_status = False
-        st.markdown(
-            f'<div class="status-box error-box">'
-            f'❌ GAGAL MEMBUKA SPREADSHEET'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-else:
-    st.session_state.connection_status = False
-    st.markdown(
-        f'<div class="status-box error-box">'
-        f'❌ GAGAL TERHUBUNG KE GOOGLE SHEETS - PERIKSA SECRETS'
-        f'</div>',
-        unsafe_allow_html=True
-    )
 
-# ==========================================
-# FILE UPLOAD
-# ==========================================
+        if ws:
+            st.markdown(f'<div class="status-box success-box">✅ TERHUBUNG | {target_sheet_name}</div>', unsafe_allow_html=True)
+            connection_status = True
+        else:
+            connection_status = False
+
+    except Exception as e:
+        st.markdown(f'<div class="status-box error-box">❌ GAGAL AKSES: {e}</div>', unsafe_allow_html=True)
+        connection_status = False
+else:
+    st.markdown(f'<div class="status-box error-box">❌ GAGAL TERHUBUNG - PERIKSA SECRETS</div>', unsafe_allow_html=True)
+    connection_status = False
+
+# Upload Section
 st.markdown("---")
 st.subheader("📤 Upload Data")
 
 uploaded_file = st.file_uploader(
-    f"Drop file {menu} (XLSX/CSV)",
+    f"Drop file {menu} di sini (XLSX/CSV)",
     type=["xlsx", "xls", "csv"],
-    help="Upload file data WSA, MODOROSO, atau WAPPR"
+    help="Upload file data Anda"
 )
 
-# ==========================================
-# PROCESSING
-# ==========================================
-if uploaded_file:
-    # Validasi file
-    if not validate_file_extension(uploaded_file.name):
-        st.error(ERROR_MESSAGES['invalid_format'])
-    else:
-        start_time = time.time()
+if connection_status and ws and uploaded_file:
+    df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.lower().endswith('.csv') else pd.read_excel(uploaded_file)
+    
+    # Progress bar
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    try:
+        # Step 1: Clean
+        status_text.text("🧹 Membersihkan data...")
+        progress_bar.progress(20)
+        time.sleep(0.3)
         
-        with st.spinner("Membaca file..."):
-            try:
-                # Baca file
-                if uploaded_file.name.lower().endswith('.csv'):
-                    df_raw = pd.read_csv(uploaded_file)
-                else:
-                    df_raw = pd.read_excel(uploaded_file)
-                
-                st.session_state.raw_data = df_raw
-                st.session_state.last_upload = datetime.now()
-                
-                st.success(f"✅ File berhasil dibaca: {len(df_raw):,} baris, {len(df_raw.columns)} kolom")
-                
-            except Exception as e:
-                st.error(f"❌ Gagal membaca file: {e}")
-                st.stop()
+        df = clean_common_data(df_raw.copy())
         
-        # Preview Data Mentah
-        if show_preview:
-            with st.expander("📋 Preview Data Mentah", expanded=False):
-                st.dataframe(df_raw.head(100), use_container_width=True)
-                st.caption(f"Menampilkan 100 dari {len(df_raw):,} baris | Memory: {memory_usage(df_raw)}")
+        # Step 2: Filter by mode
+        status_text.text("🔍 Memfilter data...")
+        progress_bar.progress(40)
+        time.sleep(0.3)
         
-        # Processing
-        with st.spinner(f"Memproses data {menu}..."):
-            try:
-                # Get existing IDs dari Google Sheets
-                existing_ids = []
-                if gs_client and ws:
-                    check_col = 'SC Order No/Track ID/CSRM No' if menu in ["WSA (Validation)", "WAPPR"] else 'Workorder'
-                    existing_ids = gs_client.get_existing_ids(column=check_col)
-                
-                # Process data
-                mode_map = {
-                    "WSA (Validation)": "WSA",
-                    "MODOROSO": "MODOROSO",
-                    "WAPPR": "WAPPR"
-                }
-                
-                processor = DataProcessor(mode=mode_map[menu])
-                
-                df_final = (processor
-                    .load_data(df_raw)
-                    .clean_common()
-                    .filter_by_mode()
-                    .filter_by_month(selected_months)
-                    .remove_duplicates(existing_ids)
-                    .finalize())
-                
-                st.session_state.processed_data = df_final
-                st.session_state.processing_stats = processor.get_stats()
-                
-                processing_time = time.time() - start_time
-                
-            except Exception as e:
-                st.error(f"❌ Gagal memproses data: {e}")
-                logger.error(f"Processing error: {e}", exc_info=True)
-                st.stop()
+        if menu == "WSA (Validation)":
+            df_filtered, check_col = proses_wsa(df)
+        elif menu == "MODOROSO":
+            df_filtered, check_col = proses_modoroso(df)
+        elif menu == "WAPPR":
+            df_filtered, check_col = proses_wappr(df)
         
-        # ==========================================
+        # Step 3: Filter by month
+        status_text.text("📅 Memfilter periode...")
+        progress_bar.progress(60)
+        time.sleep(0.3)
+        
+        if 'Date Created' in df_filtered.columns:
+            df_filtered['Date Created DT'] = pd.to_datetime(df_filtered['Date Created'].astype(str).str.replace(r'\.0$', '', regex=True), errors='coerce')
+            data_count_before = len(df_filtered)
+            if selected_months:
+                df_filtered = df_filtered[df_filtered['Date Created DT'].dt.month.isin(selected_months)]
+            
+            if data_count_before > 0 and len(df_filtered) == 0:
+                st.warning(f"⚠️ {data_count_before} data ditemukan, tapi hilang karena filter bulan.")
+            
+            df_filtered['Date Created Display'] = df_filtered['Date Created DT'].dt.strftime('%d/%m/%Y %H:%M')
+            df_filtered['Date Created'] = df_filtered['Date Created Display']
+        
+        # Step 4: Check duplicates
+        status_text.text("🔗 Mengecek duplikat...")
+        progress_bar.progress(80)
+        time.sleep(0.3)
+        
+        google_data = ws.get_all_records()
+        google_df = pd.DataFrame(google_data)
+        
+        if not google_df.empty and check_col in google_df.columns:
+            existing_ids = google_df[check_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
+            
+            col_sc = 'SC Order No/Track ID/CSRM No'
+            if col_sc in df_filtered.columns:
+                df_filtered[col_sc] = df_filtered[col_sc].astype(str).apply(lambda x: x.split('_')[0])
+            
+            df_final = df_filtered[~df_filtered[check_col].astype(str).str.strip().isin(existing_ids)].copy()
+        else:
+            col_sc = 'SC Order No/Track ID/CSRM No'
+            if col_sc in df_filtered.columns:
+                df_filtered[col_sc] = df_filtered[col_sc].astype(str).apply(lambda x: x.split('_')[0])
+            df_final = df_filtered.copy()
+        
+        # Step 5: Finalize
+        status_text.text("✅ Finalizing...")
+        progress_bar.progress(100)
+        time.sleep(0.3)
+        
+        status_text.empty()
+        progress_bar.empty()
+        
+        # Reorder columns
+        if menu == "MODOROSO":
+            target_order = ['Date Created', 'Workorder', 'SC Order No/Track ID/CSRM No', 
+                            'Service No.', 'CRM Order Type', 'Status', 'Address', 
+                            'Customer Name', 'Workzone', 'Contact Number', 'Mitra']
+        else:
+            target_order = ['Date Created', 'Workorder', 'SC Order No/Track ID/CSRM No', 
+                            'Service No.', 'CRM Order Type', 'Status', 'Address', 
+                            'Customer Name', 'Workzone', 'Booking Date', 'Contact Number']
+        
+        cols_final = [c for c in target_order if c in df_final.columns]
+        
         # METRICS
-        # ==========================================
         st.markdown("---")
-        st.subheader("📊 Ringkasan Processing")
+        st.subheader("📊 Ringkasan")
         
-        stats = st.session_state.processing_stats
+        m1, m2, m3 = st.columns(3)
         
-        col1, col2, col3, col4 = st.columns(4)
+        with m1:
+            st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-icon">📂</div>
+                    <div class="metric-value">{len(df_filtered):,}</div>
+                    <div class="metric-label">Data Filtered</div>
+                </div>
+            """, unsafe_allow_html=True)
         
-        with col1:
-            st.markdown(
-                f'<div class="metric-card">'
-                f'<h5>📂 Data Input</h5>'
-                f'<h2>{stats.get("raw_rows", 0):,}</h2>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+        with m2:
+            st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-icon">✨</div>
+                    <div class="metric-value success">{len(df_final):,}</div>
+                    <div class="metric-label">Data Unik</div>
+                </div>
+            """, unsafe_allow_html=True)
         
-        with col2:
-            st.markdown(
-                f'<div class="metric-card">'
-                f'<h5>🔍 Data Filtered</h5>'
-                f'<h2>{stats.get("filtered_rows", 0):,}</h2>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+        with m3:
+            st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-icon">🔗</div>
+                    <div class="metric-value" style="font-size: 18px; margin-top: 10px;">{check_col}</div>
+                    <div class="metric-label">Validasi By</div>
+                </div>
+            """, unsafe_allow_html=True)
         
-        with col3:
-            st.markdown(
-                f'<div class="metric-card">'
-                f'<h5>✨ Data Unik</h5>'
-                f'<h2>{stats.get("unique_rows", 0):,}</h2>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-        
-        with col4:
-            st.markdown(
-                f'<div class="metric-card">'
-                f'<h5>🎯 Data Final</h5>'
-                f'<h2 style="color: #00ff88;">{len(df_final):,}</h2>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-        
-        # Processing details
-        with st.expander("📈 Detail Processing", expanded=False):
-            detail_col1, detail_col2 = st.columns(2)
-            
-            with detail_col1:
-                st.write("**Statistik Processing:**")
-                st.write(f"- Waktu processing: {processing_time:.2f} detik")
-                st.write(f"- Data yang difilter bulan: {stats.get('month_filtered_out', 0):,}")
-                st.write(f"- Duplikat dihapus: {stats.get('duplicates_removed', 0):,}")
-            
-            with detail_col2:
-                st.write("**Kolom Output:**")
-                st.write(", ".join(df_final.columns.tolist()))
-        
-        # ==========================================
-        # DATA QUALITY CHECK
-        # ==========================================
-        if show_quality and len(df_final) > 0:
-            st.markdown("---")
-            st.subheader("🔍 Data Quality Check")
-            
-            quality_checker = DataQualityChecker(df_final)
-            quality_report = QualityReport(quality_checker)
-            summary_card = quality_report.generate_summary_card()
-            
-            st.session_state.quality_report = quality_report.generate_detailed_report()
-            
-            q_col1, q_col2, q_col3 = st.columns([1, 2, 1])
-            
-            with q_col2:
-                score_color = summary_card['color']
-                st.markdown(
-                    f'<div style="text-align: center;">'
-                    f'<div style="'
-                    f'font-size: 72px; font-weight: bold; color: {score_color};'
-                    f'">{summary_card["score"]}</div>'
-                    f'<div style="font-size: 18px; color: #888;">Quality Score</div>'
-                    f'<div style="font-size: 24px; color: {score_color}; margin-top: 10px;">'
-                    f'{summary_card["status"]}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-            
-            # Quality metrics
-            qm_col1, qm_col2, qm_col3, qm_col4 = st.columns(4)
-            
-            with qm_col1:
-                st.metric("Total Issues", summary_card['total_issues'])
-            with qm_col2:
-                st.metric("Critical", summary_card['critical_issues'], delta_color="inverse")
-            with qm_col3:
-                st.metric("Warnings", summary_card['warning_issues'])
-            with qm_col4:
-                st.metric("Quality Level", summary_card['quality_level'].upper())
-            
-            # Detailed quality report
-            with st.expander("📋 Laporan Quality Detail", expanded=False):
-                st.text(st.session_state.quality_report)
-        
-        # ==========================================
-        # ANALYTICS
-        # ==========================================
-        if show_analytics and len(df_final) > 0:
-            st.markdown("---")
-            st.subheader("📈 Analytics Dashboard")
-            
-            analyzer = DataAnalyzer(df_final)
-            
-            # Tabs untuk berbagai analisis
-            tab1, tab2, tab3, tab4 = st.tabs([
-                "📊 Status", "🌍 Workzone", "📅 Bulan", "🏆 Top Customers"
-            ])
-            
-            with tab1:
-                status_analysis = analyzer.analyze_by_status()
-                if not status_analysis.empty:
-                    st.dataframe(status_analysis, use_container_width=True)
-                    
-                    # Bar chart
-                    st.bar_chart(status_analysis.set_index('Status')['Count'])
-                else:
-                    st.info("Tidak ada data status untuk dianalisis")
-            
-            with tab2:
-                workzone_analysis = analyzer.analyze_by_workzone()
-                if not workzone_analysis.empty:
-                    st.dataframe(workzone_analysis, use_container_width=True)
-                else:
-                    st.info("Tidak ada data workzone untuk dianalisis")
-            
-            with tab3:
-                month_analysis = analyzer.analyze_by_month()
-                if not month_analysis.empty:
-                    st.dataframe(month_analysis, use_container_width=True)
-                else:
-                    st.info("Tidak ada data bulan untuk dianalisis")
-            
-            with tab4:
-                top_customers = analyzer.get_top_customers(top_n=10)
-                if not top_customers.empty:
-                    st.dataframe(top_customers, use_container_width=True)
-                else:
-                    st.info("Tidak ada data customer untuk dianalisis")
-        
-        # ==========================================
-        # PREVIEW & DOWNLOAD
-        # ==========================================
+        # Preview
         st.markdown("---")
-        st.subheader("📋 Preview Data Final")
+        st.subheader("📋 Preview Data")
         
-        st.dataframe(df_final, use_container_width=True, height=400)
+        if 'Workzone' in df_final.columns:
+            df_final = df_final.sort_values('Workzone')
         
-        st.caption(f"Menampilkan {len(df_final):,} baris data | {len(df_final.columns)} kolom")
+        st.dataframe(df_final[cols_final], use_container_width=True, height=400)
+        st.caption(f"Menampilkan {len(df_final):,} baris | {len(cols_final)} kolom")
         
-        # Download Section
+        # Download
         st.markdown("---")
-        st.subheader("💾 Export Data")
+        st.subheader("💾 Download")
         
-        dl_col1, dl_col2, dl_col3 = st.columns(3)
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+            df_final[cols_final].to_excel(writer, index=False, sheet_name='Data')
+            worksheet = writer.sheets['Data']
+            for i, col in enumerate(df_final[cols_final].columns):
+                max_len = max(df_final[cols_final][col].astype(str).map(len).max(), len(col)) + 2
+                worksheet.set_column(i, i, min(max_len, 50))
         
-        timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
-        mode_short = menu.split()[0]
-        
-        with dl_col1:
-            # Excel Export
-            excel_data = export_to_excel(df_final)
+        col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+        with col_dl2:
             st.download_button(
-                label="📥 Download Excel (.xlsx)",
-                data=excel_data,
-                file_name=f"{EXPORT_CONFIG['filename_prefix']}_{mode_short}_{timestamp}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                label=f"📥 Download {menu} (Excel)",
+                data=excel_buffer.getvalue(),
+                file_name=f"Cleaned_{menu.replace(' ', '_')}_{datetime.now().strftime('%d%m%Y_%H%M')}.xlsx",
                 use_container_width=True
             )
         
-        with dl_col2:
-            # CSV Export
-            csv_data = export_to_csv(df_final)
-            st.download_button(
-                label="📥 Download CSV (.csv)",
-                data=csv_data,
-                file_name=f"{EXPORT_CONFIG['filename_prefix']}_{mode_short}_{timestamp}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        
-        with dl_col3:
-            # JSON Export
-            json_data = export_to_json(df_final)
-            st.download_button(
-                label="📥 Download JSON (.json)",
-                data=json_data,
-                file_name=f"{EXPORT_CONFIG['filename_prefix']}_{mode_short}_{timestamp}.json",
-                mime="application/json",
-                use_container_width=True
-            )
-        
-        # Success message
-        st.markdown("---")
         st.success(f"✅ Processing selesai! {len(df_final):,} data siap digunakan.")
+        
+    except Exception as e:
+        st.error(f"❌ Terjadi kesalahan: {e}")
 
-else:
-    # Empty state
-    st.markdown("---")
-    st.info("""
-    👋 **Selamat Datang di WSA Fulfillment Pro!**
-    
-    Untuk memulai:
-    1. Pilih mode operasi di sidebar (WSA/MODOROSO/WAPPR)
-    2. Sesuaikan filter bulan jika diperlukan
-    3. Upload file data Anda (XLSX/CSV)
-    4. Sistem akan otomatis memproses dan membersihkan data
-    5. Download hasil dalam format yang diinginkan
-    
-    **Tips:** Pastikan file memiliki kolom yang diperlukan seperti 
-    'SC Order No/Track ID/CSRM No', 'Workorder', dan 'Date Created'
-    """)
-
-# ==========================================
-# FOOTER
-# ==========================================
-st.markdown("---")
-st.caption(f"© 2024 {APP_NAME} v{APP_VERSION} | Dibuat dengan ❤️ untuk WSA Team")
+elif not uploaded_file and connection_status:
+    st.markdown("""
+        <div class="info-box">
+            <h4 style="margin-top: 0; color: #00d4ff;">👋 Selamat Datang!</h4>
+            <p>Silakan upload file data Anda untuk memulai processing.</p>
+            <p><strong>Format yang didukung:</strong> XLSX, XLS, CSV</p>
+        </div>
+    """, unsafe_allow_html=True)
