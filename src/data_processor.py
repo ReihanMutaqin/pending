@@ -73,7 +73,7 @@ class DataProcessor:
         # Clean Workorder
         if 'Workorder' in df.columns:
             df['Workorder'] = df['Workorder'].apply(
-                lambda x: clean_string(x).replace(r'\.0$', '', regex=True)
+                lambda x: re.sub(r'\.0$', '', clean_string(x))
             )
         
         # Clean Booking Date
